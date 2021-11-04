@@ -1,0 +1,218 @@
+{
+  "pipelineSpec": {
+    "components": {
+      "comp-basic-prepoc": {
+        "executorLabel": "exec-basic-prepoc",
+        "inputDefinitions": {
+          "parameters": {
+            "root_path": {
+              "type": "STRING"
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      },
+      "comp-emb-model": {
+        "executorLabel": "exec-emb-model",
+        "inputDefinitions": {
+          "artifacts": {
+            "dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      },
+      "comp-token-stopw-preproc": {
+        "executorLabel": "exec-token-stopw-preproc",
+        "inputDefinitions": {
+          "artifacts": {
+            "basic_clean_dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        },
+        "outputDefinitions": {
+          "artifacts": {
+            "token_stopw_dataset": {
+              "artifactType": {
+                "schemaTitle": "system.Dataset",
+                "schemaVersion": "0.0.1"
+              }
+            }
+          }
+        }
+      }
+    },
+    "deploymentSpec": {
+      "executors": {
+        "exec-basic-prepoc": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "basic_prepoc"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'pandas' 'google-cloud-storage' 'gcsfs' 'fsspec' 'kfp==1.8.9' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef basic_prepoc(dataset: Output[Dataset], root_path:str):\n\n    import pandas as pd\n    import re\n\n\n    df_synopsys_raw = pd.read_csv('{}/data/raw/synopsis_From_BQ.csv'.format(root_path))\n\n\n    def prep_genre(genre):\n\n        output = list()\n\n        for i in genre:\n\n            genre_string = i.strip()\n\n            if len(genre_string) > 0:\n                output.append(genre_string)\n\n        output_str = ' '.join([str(elem) for elem in output])\n\n        output_uniques =  list(set(output_str.split(' ')))\n\n        final_output = ' '.join([str(elem) for elem in output_uniques])\n\n        return final_output\n\n    def replace_artigo(nome_programa):\n        aconteceu = 0\n        if nome_programa[-3:] == \", A\":      \n            padrao = \", A\"\n            sub = \"A\"\n            aconteceu = 1\n        elif nome_programa[-4:] == \", As\":\n            padrao = \", As\"\n            sub = \"As\"\n            aconteceu = 1\n        elif nome_programa[-3:] == \", O\":      \n            padrao = \", O\"\n            sub = \"O\"\n            aconteceu = 1\n        elif nome_programa[-4:] == \", Os\":\n            padrao = \", Os\"\n            sub = \"Os\"\n            aconteceu = 1\n        elif nome_programa[-5:] == \", The\":\n            padrao = \", The\"\n            sub = \"The\"\n            aconteceu = 1\n\n        if aconteceu == 1:\n            temp_var = re.sub(padrao,\"\", nome_programa)\n            return sub + \" \" + temp_var\n        else:\n            return nome_programa\n\n    df_synopsys_raw['title'] = df_synopsys_raw['title'].apply(lambda x: replace_artigo(x))\n    df_synopsys_raw['genre'] = df_synopsys_raw['genre'].str.replace(\"|\", \",\", regex=True)\n    df_synopsys_raw['genre'] = df_synopsys_raw['genre'].str.replace(\"/\", \",\", regex=True)\n    df_synopsys_raw['genre'] = df_synopsys_raw['genre'].apply(lambda x: x.split(','))\n    df_synopsys_raw['genre'] = df_synopsys_raw['genre'].apply(lambda x: prep_genre(x))\n    df_synopsys_raw['genre'] = df_synopsys_raw[['type', 'title', 'genre']].groupby(['type', 'title'])['genre'].transform(lambda x: ' '.join(x))\n    df_synopsys_raw['synopsis_count'] = df_synopsys_raw['synopsis'].apply(lambda x: len(x))\n    df_synopsys_raw['synopsis_max'] = df_synopsys_raw[['type', 'title', 'synopsis','synopsis_count']].groupby(['type', 'title'])['synopsis_count'].transform(max)\n    df_synopsys_raw = df_synopsys_raw[df_synopsys_raw.synopsis_count == df_synopsys_raw.synopsis_max][['type', 'title', 'synopsis', 'genre']]\n    df_synopsys_raw['genre'] = df_synopsys_raw['genre'].apply(lambda x: list(set(x.split(\" \"))))\n    df_synopsys_raw['genre'] = df_synopsys_raw['genre'].apply(lambda x: \" \".join(x))\n\n    df_final = df_synopsys_raw[['type', 'title', 'synopsis','genre']].groupby(['type', 'title', 'synopsis','genre']).size().reset_index(name = \"count_duplicates\")\n\n    df_final = df_final[['type', 'title', 'synopsis', 'genre']]\n\n    dataset_path = dataset.path\n    dataset_path = dataset_path.replace('/gcs/','gs://')\n\n    df_final.to_csv(\"{}/synopsis_basic_clean.csv\".format(dataset_path), index=False)\n\n"
+            ],
+            "image": "python:3.7"
+          }
+        },
+        "exec-emb-model": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "emb_model"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'pandas' 'google-cloud-storage' 'gcsfs' 'fsspec' 'tensorflow' 'tensorflow_text' 'tensorflow_hub' 'tf-models-official' 'kfp==1.8.9' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef emb_model(dataset: Input[Dataset]):\n\n    import os\n    import shutil\n\n    import tensorflow as tf\n    import tensorflow_hub as hub\n    import tensorflow_text as text\n    from official.nlp import optimization  # to create AdamW optmizer\n\n    import numpy as np\n    import pandas as pd\n\n    synopsis_data = pd.read_csv('{}/synopsis_token_stopw.csv'.format(dataset.path))\n\n    def normalization(embeds):\n          norms = np.linalg.norm(embeds, 2, axis=1, keepdims=True)\n          return embeds/norms\n\n    synopsis_list = list(synopsis_data['sent_StopW'])\n    title_list = list(synopsis_data['title'])\n    genre_list = list(synopsis_data['genre'])\n\n    synopsis_tf = tf.constant(synopsis_list)\n\n    preprocessor = hub.KerasLayer(\"https://tfhub.dev/google/universal-sentence-encoder-cmlm/multilingual-preprocess/2\")\n    encoder = hub.KerasLayer(\"https://tfhub.dev/google/LaBSE/2\")\n    synopsis_embeds = encoder(preprocessor(synopsis_tf))['default']\n\n    synopsis_embeds_df = synopsis_data[['title', 'synopsis', 'genre', 'sent_StopW']]\n    embeds_df = pd.DataFrame(synopsis_embeds.numpy())\n    synopsis_embeds_df['embeds'] = embeds_df.values.tolist()\n\n    dataset_path = synopsis_embeds_df.path\n    dataset_path = dataset_path.replace('/gcs/','gs://')\n\n    df.to_csv(\"{}/synopsis_emb.csv\".format(dataset_path), index=False)\n\n"
+            ],
+            "image": "python:3.7"
+          }
+        },
+        "exec-token-stopw-preproc": {
+          "container": {
+            "args": [
+              "--executor_input",
+              "{{$}}",
+              "--function_to_execute",
+              "token_stopw_preproc"
+            ],
+            "command": [
+              "sh",
+              "-c",
+              "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip || python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1 python3 -m pip install --quiet     --no-warn-script-location 'pandas' 'google-cloud-storage' 'gcsfs' 'fsspec' 'stop-words' 'nltk' 'kfp==1.8.9' && \"$0\" \"$@\"\n",
+              "sh",
+              "-ec",
+              "program_path=$(mktemp -d)\nprintf \"%s\" \"$0\" > \"$program_path/ephemeral_component.py\"\npython3 -m kfp.v2.components.executor_main                         --component_module_path                         \"$program_path/ephemeral_component.py\"                         \"$@\"\n",
+              "\nimport kfp\nfrom kfp.v2 import dsl\nfrom kfp.v2.dsl import *\nfrom typing import *\n\ndef token_stopw_preproc(basic_clean_dataset: Input[Dataset], token_stopw_dataset: Output[Dataset]):\n\n\n    import re\n    import nltk\n    import string\n    import unicodedata\n    import pandas as pd\n    from stop_words import get_stop_words\n\n    nltk.download('wordnet')\n    nltk.download('stopwords')\n    nltk.download('punkt')\n\n    re_tab_pattern       = r\"(\\t)\"\n    re_return_pattern    = r\"(\\r)\"\n    re_comma_pattern     = r\"(,{2,})\"\n    re_space_pattern     = r\"(\\s{1,})\"\n    re_linefeed_pattern  = r\"(\\n)\"\n\n    re_tab_obj           = re.compile(re_tab_pattern)\n    re_return_obj        = re.compile(re_return_pattern)\n    re_comma_obj         = re.compile(re_comma_pattern)\n    re_space_obj         = re.compile(re_space_pattern)\n    re_linefeed_obj      = re.compile(re_linefeed_pattern)\n\n    stop_ptBr = set(nltk.corpus.stopwords.words('portuguese'))\n    punctuation = list(string.punctuation)\n    stop_ptBr.update(punctuation)\n\n    def strip_accents(text):\n        try:\n            text = unicode(text, 'utf-8')\n        except NameError: # unicode is a default on python 3 \n            pass\n\n        text = unicodedata.normalize('NFD', text)\\\n               .encode('ascii', 'ignore')\\\n               .decode(\"utf-8\")\n        return str(text)\n\n    def remove_dot(text):\n        return re.sub(r'\\.(?!\\d)', '', text)\n\n    def remove_numbers(text):\n        return re.sub(r'[0-9]', '', text)\n\n    def all_Regex_transformations(text, has_space=True):\n        final_text = text\n\n        if has_space is False:\n            final_text = final_text.replace(' ' , '_')\n\n        final_text = strip_accents(final_text)\n        final_text = remove_dot(final_text)\n        final_text = remove_numbers(final_text)\n        final_text = re.sub(re_comma_obj     , ''  , final_text)\n        final_text = final_text.replace('\\t' , ' ')\n        final_text = final_text.replace('\\n' , ' ')\n        final_text = final_text.replace('\\r' , ' ')\n        final_text = final_text.replace('\\\\' , ' ')\n        final_text = final_text.replace(','  , ' ')\n        final_text = final_text.replace('.'  , ' ')\n        final_text = final_text.replace('-'  , ' ')\n        final_text = final_text.replace('/'  , ' ')    \n        final_text = final_text.replace('\"'  , ' ')\n        final_text = final_text.replace(')'  , ' ')\n        final_text = final_text.replace('('  , ' ')\n        final_text = final_text.replace('!'  , ' ')\n        final_text = final_text.replace('?'  , ' ')\n        final_text = re.sub(re_space_obj     , ' '  , final_text)\n\n        return final_text.lower()\n\n    df = pd.read_csv('{}/synopsis_basic_clean.csv'.format(basic_clean_dataset.path))\n\n    df['sinopse_prep']  = df.apply(lambda x: all_Regex_transformations(text=x['synopsis']) , axis=1 )\n    df['sinopse_token'] = df['sinopse_prep'].apply(nltk.tokenize.word_tokenize) \n    df['sinopse_token_stop'] = df['sinopse_token'].apply(lambda x: [item for item in x if item not in stop_ptBr])\n    df['word len'] = df['sinopse_token_stop'].apply(lambda x: len(x)>10)\n    df = df[df['word len']==True]\n    df['sent_StopW'] = df['sinopse_token_stop'].apply(lambda x: ' '.join(x))\n\n    dataset_path = token_stopw_dataset.path\n    dataset_path = dataset_path.replace('/gcs/','gs://')\n\n    df.to_csv(\"{}/synopsis_token_stopw.csv\".format(dataset_path), index=False)\n\n"
+            ],
+            "image": "python:3.7"
+          }
+        }
+      }
+    },
+    "pipelineInfo": {
+      "name": "pipeline-test-1"
+    },
+    "root": {
+      "dag": {
+        "tasks": {
+          "basic-prepoc": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-basic-prepoc"
+            },
+            "inputs": {
+              "parameters": {
+                "root_path": {
+                  "componentInputParameter": "root_path"
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "basic-prepoc"
+            }
+          },
+          "emb-model": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-emb-model"
+            },
+            "dependentTasks": [
+              "token-stopw-preproc"
+            ],
+            "inputs": {
+              "artifacts": {
+                "dataset": {
+                  "taskOutputArtifact": {
+                    "outputArtifactKey": "token_stopw_dataset",
+                    "producerTask": "token-stopw-preproc"
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "emb-model"
+            }
+          },
+          "token-stopw-preproc": {
+            "cachingOptions": {
+              "enableCache": true
+            },
+            "componentRef": {
+              "name": "comp-token-stopw-preproc"
+            },
+            "dependentTasks": [
+              "basic-prepoc"
+            ],
+            "inputs": {
+              "artifacts": {
+                "basic_clean_dataset": {
+                  "taskOutputArtifact": {
+                    "outputArtifactKey": "dataset",
+                    "producerTask": "basic-prepoc"
+                  }
+                }
+              }
+            },
+            "taskInfo": {
+              "name": "token-stopw-preproc"
+            }
+          }
+        }
+      },
+      "inputDefinitions": {
+        "parameters": {
+          "root_path": {
+            "type": "STRING"
+          }
+        }
+      }
+    },
+    "schemaVersion": "2.0.0",
+    "sdkVersion": "kfp-1.8.9"
+  },
+  "runtimeConfig": {
+    "gcsOutputDirectory": "gs://asl-project-globo-de18f040",
+    "parameters": {
+      "root_path": {
+        "stringValue": "gs://asl-project-globo-de18f040"
+      }
+    }
+  }
+}
